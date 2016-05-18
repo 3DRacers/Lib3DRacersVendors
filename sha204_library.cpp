@@ -231,12 +231,6 @@ uint8_t atsha204Class::sha204p_sleep()
   return swi_send_byte(SHA204_SWI_FLAG_SLEEP);
 }
 
-uint8_t atsha204Class::sha204p_resync(uint8_t size, uint8_t *response)
-{
-  delay(SHA204_SYNC_TIMEOUT);
-  return sha204p_receive_response(size, response);
-}
-
 uint8_t atsha204Class::sha204p_receive_response(uint8_t size, uint8_t *response)
 {
   uint8_t count_byte;
@@ -305,26 +299,6 @@ uint8_t atsha204Class::sha204c_wakeup(uint8_t *response)
   return ret_code;
 }
 
-uint8_t atsha204Class::sha204c_resync(uint8_t size, uint8_t *response)
-{
-  // Try to re-synchronize without sending a Wake token
-  // (step 1 of the re-synchronization process).
-  uint8_t ret_code = sha204p_resync(size, response);
-  if (ret_code == SHA204_SUCCESS)
-    return ret_code;
-
-  // We lost communication. Send a Wake pulse and try
-  // to receive a response (steps 2 and 3 of the
-  // re-synchronization process).
-  (void) sha204p_sleep();
-  ret_code = sha204c_wakeup(response);
-
-  // Translate a return value of success into one
-  // that indicates that the device had to be woken up
-  // and might have lost its TempKey.
-  return (ret_code == SHA204_SUCCESS ? SHA204_RESYNC_WITH_WAKEUP : ret_code);
-}
-
 uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_size, uint8_t *rx_buffer, uint8_t execution_delay, uint8_t execution_timeout)
 {
   uint8_t ret_code = SHA204_FUNC_FAIL;
@@ -350,10 +324,13 @@ uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_s
     ret_code = sha204p_send_command(count, tx_buffer);
     if (ret_code != SHA204_SUCCESS) 
     {
+	  return ret_code;
+	  /* DISABLED
       if (sha204c_resync(rx_size, rx_buffer) == SHA204_RX_NO_RESPONSE)
         return ret_code; // The device seems to be dead in the water.
       else
         continue;
+		*/
     }
 
     // Wait minimum command execution time and then start polling for a response.
@@ -378,18 +355,23 @@ uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_s
 
       if (ret_code == SHA204_RX_NO_RESPONSE) 
       {
+		return ret_code;
+		/* DISABLED
         // We did not receive a response. Re-synchronize and send command again.
         if (sha204c_resync(rx_size, rx_buffer) == SHA204_RX_NO_RESPONSE)
           // The device seems to be dead in the water.
           return ret_code;
         else
           break;
+		 */
       }
 
       // Check whether we received a valid response.
       if (ret_code == SHA204_INVALID_SIZE)
       {
         // We see 0xFF for the count when communication got out of sync.
+		return ret_code;
+		/* DISABLED
         ret_code_resync = sha204c_resync(rx_size, rx_buffer);
         if (ret_code_resync == SHA204_SUCCESS)
           // We did not have to wake up the device. Try receiving response again.
@@ -401,6 +383,7 @@ uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_s
         else
           // We failed to re-synchronize.
           return ret_code;
+		*/
       }
 
       // We received a response of valid size.
@@ -439,6 +422,8 @@ uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_s
 
       else 
       {
+		return ret_code;
+		/* DISABLED
         // Received response with incorrect CRC.
         ret_code_resync = sha204c_resync(rx_size, rx_buffer);
         if (ret_code_resync == SHA204_SUCCESS)
@@ -451,6 +436,7 @@ uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_s
         else
           // We failed to re-synchronize.
           return ret_code;
+		*/
       } // block end of check response consistency
 
     } // block end of receive retry loop
@@ -462,38 +448,6 @@ uint8_t atsha204Class::sha204c_send_and_receive(uint8_t *tx_buffer, uint8_t rx_s
 
 
 /* Marshaling functions */
-
-uint8_t atsha204Class::sha204m_random(uint8_t * tx_buffer, uint8_t * rx_buffer, uint8_t mode)
-{
-  if (!tx_buffer || !rx_buffer || (mode > RANDOM_NO_SEED_UPDATE))
-    return SHA204_BAD_PARAM;
-
-  tx_buffer[SHA204_COUNT_IDX] = RANDOM_COUNT;
-  tx_buffer[SHA204_OPCODE_IDX] = SHA204_RANDOM;
-  tx_buffer[RANDOM_MODE_IDX] = mode & RANDOM_SEED_UPDATE;
-
-  tx_buffer[RANDOM_PARAM2_IDX] =
-    tx_buffer[RANDOM_PARAM2_IDX + 1] = 0;
-
-  return sha204c_send_and_receive(&tx_buffer[0], RANDOM_RSP_SIZE, &rx_buffer[0], RANDOM_DELAY, RANDOM_EXEC_MAX - RANDOM_DELAY);
-}
-
-uint8_t atsha204Class::sha204m_dev_rev(uint8_t *tx_buffer, uint8_t *rx_buffer)
-{
-  if (!tx_buffer || !rx_buffer)
-    return SHA204_BAD_PARAM;
-
-  tx_buffer[SHA204_COUNT_IDX] = DEVREV_COUNT;
-  tx_buffer[SHA204_OPCODE_IDX] = SHA204_DEVREV;
-
-  // Parameters are 0.
-  tx_buffer[DEVREV_PARAM1_IDX] =
-    tx_buffer[DEVREV_PARAM2_IDX] =
-    tx_buffer[DEVREV_PARAM2_IDX + 1] = 0;
-
-  return sha204c_send_and_receive(&tx_buffer[0], DEVREV_RSP_SIZE, &rx_buffer[0],
-  DEVREV_DELAY, DEVREV_EXEC_MAX - DEVREV_DELAY);
-}
 
 uint8_t atsha204Class::sha204m_read(uint8_t *tx_buffer, uint8_t *rx_buffer, uint8_t zone, uint16_t address)
 {
@@ -539,12 +493,13 @@ uint8_t atsha204Class::sha204m_execute(uint8_t op_code, uint8_t param1, uint16_t
 	uint8_t *p_buffer;
 	uint8_t len;
 
-	uint8_t ret_code = sha204m_check_parameters(op_code, param1, param2,
+	/*uint8_t ret_code = sha204m_check_parameters(op_code, param1, param2,
 				datalen1, data1, datalen2, data2, datalen3, data3,
 				tx_size, tx_buffer, rx_size, rx_buffer);
 	if (ret_code != SHA204_SUCCESS)
 		return ret_code;
-
+	*/
+	
 	// Supply delays and response size.
 	switch (op_code) 
 	{
@@ -661,111 +616,6 @@ uint8_t atsha204Class::sha204m_execute(uint8_t op_code, uint8_t param1, uint16_t
 	// Send command and receive response.
 	return sha204c_send_and_receive(&tx_buffer[0], response_size,
 				&rx_buffer[0],	poll_delay, poll_timeout);
-}
-
-uint8_t atsha204Class::sha204m_check_parameters(uint8_t op_code, uint8_t param1, uint16_t param2,
-			uint8_t datalen1, uint8_t *data1, uint8_t datalen2, uint8_t *data2, uint8_t datalen3, uint8_t *data3,
-			uint8_t tx_size, uint8_t *tx_buffer, uint8_t rx_size, uint8_t *rx_buffer)
-{
-#ifdef SHA204_CHECK_PARAMETERS
-
-	uint8_t len = datalen1 + datalen2 + datalen3 + SHA204_CMD_SIZE_MIN;
-	if (!tx_buffer || tx_size < len || rx_size < SHA204_RSP_SIZE_MIN || !rx_buffer)
-		return SHA204_BAD_PARAM;
-
-	if ((datalen1 > 0 && !data1) || (datalen2 > 0 && !data2) || (datalen3 > 0 && !data3))
-		return SHA204_BAD_PARAM;
-
-	// Check parameters depending on op-code.
-	switch (op_code) 
-	{
-		case SHA204_CHECKMAC:
-			if (
-					// no null pointers allowed
-					!data1 || !data2
-					// No reserved bits should be set.
-					|| (param1 | CHECKMAC_MODE_MASK) != CHECKMAC_MODE_MASK
-					// key_id > 15 not allowed
-					|| param2 > SHA204_KEY_ID_MAX
-				)
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_DERIVE_KEY:
-			if (param2 > SHA204_KEY_ID_MAX)
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_DEVREV:
-			break;
-
-		case SHA204_GENDIG:
-			if ((param1 != GENDIG_ZONE_OTP) && (param1 != GENDIG_ZONE_DATA))
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_HMAC:
-			if ((param1 & ~HMAC_MODE_MASK) != 0)
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_LOCK:
-			if (((param1 & ~LOCK_ZONE_MASK) != 0)
-						|| ((param1 & LOCK_ZONE_NO_CRC) && (param2 != 0)))
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_MAC:
-			if (((param1 & ~MAC_MODE_MASK) != 0)
-						|| (((param1 & MAC_MODE_BLOCK2_TEMPKEY) == 0) && !data1))
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_NONCE:
-			if (  !data1
-					|| (param1 > NONCE_MODE_PASSTHROUGH)
-					|| (param1 == NONCE_MODE_INVALID)
-				)
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_PAUSE:
-			break;
-
-		case SHA204_RANDOM:
-			if (param1 > RANDOM_NO_SEED_UPDATE)
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_READ:
-			if (((param1 & ~READ_ZONE_MASK) != 0)
-						|| ((param1 & READ_ZONE_MODE_32_BYTES) && (param1 == SHA204_ZONE_OTP)))
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_TEMPSENSE:
-			break;
-
-		case SHA204_UPDATE_EXTRA:
-			if (param1 > UPDATE_CONFIG_BYTE_86)
-				return SHA204_BAD_PARAM;
-			break;
-
-		case SHA204_WRITE:
-			if (!data1 || ((param1 & ~WRITE_ZONE_MASK) != 0))
-				return SHA204_BAD_PARAM;
-			break;
-
-		default:
-			// unknown op-code
-			return SHA204_BAD_PARAM;
-	}
-
-	return SHA204_SUCCESS;
-
-#else
-	return SHA204_SUCCESS;
-#endif
 }
 
 /* CRC Calculator and Checker */
